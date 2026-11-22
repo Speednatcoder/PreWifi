@@ -11,19 +11,255 @@
 
 //anomalie
 
-static void sprawdz_anomalie(Statystyki* dane) {
-    if (dane->syn > 50 && dane->syn > dane->ack && dane->ile_alertow < MAX_ALERTOW)
+
+static void dodaj_alert(Statystyki* dane, const char* komunikat)
+{
+    if (dane->ile_alertow >= MAX_ALERTOW)
+        return;
+
+    strcpy(dane->alerty[dane->ile_alertow], komunikat);
+    dane->ile_alertow++;
+}
+
+static void sprawdz_anomalie(Statystyki* dane)
+{
+
+    /* =====================================
+       SYN bez ACK
+       ===================================== */
+
+    if (dane->syn > 50 &&
+        dane->syn > dane->ack)
     {
-        strcpy(dane->alerty[dane->ile_alertow],"Duza liczba pakietow SYN bez odpowiedzi ACK" );
-        dane->ile_alertow++;
+        dodaj_alert(
+            dane,
+            "Duza liczba pakietow SYN bez odpowiedzi ACK (mozliwe nieudane polaczenia lub SYN Flood).");
     }
 
-    if (dane->rst > 10 && dane->ile_alertow < MAX_ALERTOW)
-    {
-        strcpy(dane->alerty[dane->ile_alertow],"Duza liczba pakietow RST");
+    /* =====================================
+       Duzo RST
+       ===================================== */
 
-        dane->ile_alertow++;
+    if (dane->rst > 10)
+    {
+        dodaj_alert(
+            dane,
+            "Duza liczba pakietow RST (mozliwe nagle zrywanie polaczen lub bledy komunikacji).");
     }
+
+    /* =====================================
+       Nietypowo duzo FIN
+       ===================================== */
+
+    if (dane->tcp_pakiety > 0 &&
+        dane->fin > 20 &&
+        dane->fin > dane->tcp_pakiety * 0.7)
+    {
+        dodaj_alert(
+            dane,
+            "Nietypowo duzy udzial flag FIN (duza liczba zamykanych polaczen TCP).");
+    }
+    /* =====================================
+   ACK < SYN flagi
+   ===================================== */
+
+    if (dane->syn > 0 &&
+        dane->ack < dane->syn * 0.3)
+    {
+        dodaj_alert(
+            dane,
+            "Liczba ACK jest znacznie mniejsza od SYN (czesc polaczen moze nie byc ustanawiana poprawnie).");
+    }
+
+    /* =====================================
+       Ponad 95% ruchu to TCP
+       ===================================== */
+
+    if (dane->wszystkie_pakiety > 0)
+    {
+        double tcp_proc =
+            100.0 *
+            dane->tcp_pakiety /
+            dane->wszystkie_pakiety;
+
+        double udp_proc =
+            100.0 *
+            dane->udp_pakiety /
+            dane->wszystkie_pakiety;
+
+        if (tcp_proc > 95.0)
+        {
+            dodaj_alert(
+                dane,
+                "Ponad 95% ruchu stanowil protokol TCP");
+        }
+        if (udp_proc > 95.0) {
+            dodaj_alert(dane,
+                "Ponad 95% ruchu stanowil protokol UDP");
+        }
+
+        /* =====================================
+           Dominacja jednego portu
+           ===================================== */
+
+        long long suma_portow = 0;
+        int max_port_ruch = 0;
+
+        for (int i = 0; i < 65536; i++)
+        {
+            suma_portow += dane->porty[i];
+
+            if (dane->porty[i] > max_port_ruch)
+            {
+                max_port_ruch = dane->porty[i];
+            }
+        }
+
+        if (suma_portow > 0 &&
+            max_port_ruch >= 20 &&
+            max_port_ruch >= suma_portow * 0.6)
+        {
+            dodaj_alert(
+                dane,
+                "Jeden port dominuje w analizowanym ruchu sieciowym (mozliwa koncentracja komunikacji na pojedynczej usludze)");
+        }
+
+        /* =====================================
+           Dominacja jednego adresu IP
+           ===================================== */
+
+        struct
+        {
+            int ip;
+            long long pakiety;
+        }
+        stat_ip[MAX_PAR_IP * 2];
+
+        int liczba_ip = 0;
+
+        long long suma_ip = 0;
+        long long max_ip = 0;
+
+        for (int i = 0; i < dane->liczba_par_ip; i++)
+        {
+            ParaIP para = dane->pary_ip[i];
+
+            suma_ip += 2LL * para.pakiety;
+
+            int znaleziono = 0;
+
+            for (int j = 0; j < liczba_ip; j++)
+            {
+                if (stat_ip[j].ip == para.src_ip)
+                {
+                    stat_ip[j].pakiety += para.pakiety;
+                    znaleziono = 1;
+                    break;
+                }
+            }
+
+            if (!znaleziono &&
+                liczba_ip < MAX_PAR_IP * 2)
+            {
+                stat_ip[liczba_ip].ip = para.src_ip;
+                stat_ip[liczba_ip].pakiety = para.pakiety;
+                liczba_ip++;
+            }
+
+            znaleziono = 0;
+
+            for (int j = 0; j < liczba_ip; j++)
+            {
+                if (stat_ip[j].ip == para.dst_ip)
+                {
+                    stat_ip[j].pakiety += para.pakiety;
+                    znaleziono = 1;
+                    break;
+                }
+            }
+
+            if (!znaleziono &&
+                liczba_ip < MAX_PAR_IP * 2)
+            {
+                stat_ip[liczba_ip].ip = para.dst_ip;
+                stat_ip[liczba_ip].pakiety = para.pakiety;
+                liczba_ip++;
+            }
+        }
+
+        for (int i = 0; i < liczba_ip; i++)
+        {
+            if (stat_ip[i].pakiety > max_ip)
+            {
+                max_ip = stat_ip[i].pakiety;
+            }
+        }
+
+        if (suma_ip > 0 &&
+            max_ip >= 20 &&
+            max_ip >= suma_ip * 0.6)
+        {
+            dodaj_alert(
+                dane,
+                "Jeden adres IP dominuje w analizowanym ruchu.");
+        }
+
+        /* =====================================
+           Nagly skok ruchu
+           ===================================== */
+
+        int liczba_sekund =
+            (int)dane->czas_trwania;
+
+        if (liczba_sekund < 1)
+            liczba_sekund = 1;
+
+        if (liczba_sekund > MAX_SEKUND)
+            liczba_sekund = MAX_SEKUND;
+
+        long long suma_pakietow = 0;
+        long long max_sekundowy = 0;
+
+        for (int i = 0; i < liczba_sekund; i++)
+        {
+            suma_pakietow +=
+                dane->pakiety_na_sekunde[i];
+
+            if (dane->pakiety_na_sekunde[i] >
+                max_sekundowy)
+            {
+                max_sekundowy =
+                    dane->pakiety_na_sekunde[i];
+            }
+        }
+
+        double srednia =
+            (double)suma_pakietow /
+            liczba_sekund;
+
+        if (srednia > 0 &&
+            max_sekundowy >= 20 &&
+            max_sekundowy > srednia * 5)
+        {
+            dodaj_alert(
+                dane,
+                "Wykryto nagly skok liczby pakietow w czasie (mozliwa intensywna transmisja lub nietypowe zdarzenie sieciowe).");
+        }
+    }
+
+
+    
+
+        /* =====================================
+           Brak anomalii
+           ===================================== */
+
+        if (dane->ile_alertow == 0)
+        {
+            dodaj_alert(
+                dane,
+                "Nie wykryto istotnych anomalii");
+        }
 }
 
 
