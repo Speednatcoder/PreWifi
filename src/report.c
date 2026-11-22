@@ -3,6 +3,7 @@
 #include <cairo-pdf.h>
 #include <stdio.h>
 #include <string.h>
+#include <arpa/inet.h>
 
 
 #define PAGE_WIDTH 595
@@ -500,7 +501,7 @@ static void dodaj_wykresy_do_pdf(RaportPDF* pdf)
 
 
 /* Generowanie raportu PDF */
-void zrob_pdf(const Statystyki* dane, const char* plik_wyjsciowy)
+int zrob_pdf(const Statystyki* dane, const char* plik_wyjsciowy)
 {
     if (dane == NULL || plik_wyjsciowy == NULL) {
         fprintf(stderr, "Nieprawidlowe dane raportu.\n");
@@ -773,6 +774,39 @@ void zrob_pdf(const Statystyki* dane, const char* plik_wyjsciowy)
     /* =====================================
        NAJAKTYWNIEJSZE PORTY
        ===================================== */
+    //opis najpopularniejszych portów wraz z opisem
+    const char* opis_portu(int port)
+    {
+        switch (port)
+        {
+        case 80:
+            return "HTTP - ruch stron WWW";
+
+        case 443:
+            return "HTTPS - szyfrowany ruch WWW";
+
+        case 53:
+            return "DNS - tlumaczenie nazw domen";
+
+        case 22:
+            return "SSH - zdalny dostep";
+
+        case 25:
+            return "SMTP - wysylanie poczty";
+
+        case 110:
+            return "POP3 - odbior poczty";
+
+        case 143:
+            return "IMAP - synchronizacja poczty";
+
+        case 123:
+            return "NTP - synchronizacja czasu";
+
+        default:
+            return NULL;
+        }
+    }
 
     rysuj_sekcje(&pdf, "Najaktywniejsze porty");
 
@@ -797,17 +831,33 @@ void zrob_pdf(const Statystyki* dane, const char* plik_wyjsciowy)
             }
         }
 
-        if (max_port == -1) {
+        if (max_port == -1 || max_wartosc <= 0) {
             break;
         }
 
-        snprintf(
-            linia,
-            sizeof(linia),
-            "Port %d - %d wystapien",
-            max_port,
-            max_wartosc
-        );
+        const char* opis = opis_portu(max_port);
+
+        if (opis != NULL) {
+
+            snprintf(
+                linia,
+                sizeof(linia),
+                "Port %d (%s) - %d wystapien",
+                max_port,
+                opis,
+                max_wartosc
+            );
+        }
+        else {
+
+            snprintf(
+                linia,
+                sizeof(linia),
+                "Port %d - %d wystapien",
+                max_port,
+                max_wartosc
+            );
+        }
 
         rysuj_tekst(&pdf, linia);
 
@@ -848,19 +898,29 @@ void zrob_pdf(const Statystyki* dane, const char* plik_wyjsciowy)
 
     for (int i = 0; i < liczba_par; i++) {
 
-        snprintf(
+        struct in_addr src;
+        struct in_addr dst;
+
+        src.s_addr = dane->pary_ip[i].src_ip;
+        dst.s_addr = dane->pary_ip[i].dst_ip;
+
+        char src_ip[32];
+        char dst_ip[32];
+
+        strcpy(src_ip, inet_ntoa(src));
+        strcpy(dst_ip, inet_ntoa(dst));
+
+        sprintf(
             linia,
-            sizeof(linia),
-            "%d -> %d (%d pakietow, %lld B)",
-            dane->pary_ip[i].src_ip,
-            dane->pary_ip[i].dst_ip,
+            "%d. %s -> %s (%d pakietow, %lld B)",
+            i + 1,
+            src_ip,
+            dst_ip,
             dane->pary_ip[i].pakiety,
-            dane->pary_ip[i].bajty
-        );
+            dane->pary_ip[i].bajty);
 
         rysuj_tekst(&pdf, linia);
     }
-
 
     /* =====================================
        WYKRYTE ANOMALIE
@@ -909,459 +969,10 @@ void zrob_pdf(const Statystyki* dane, const char* plik_wyjsciowy)
 
     cairo_destroy(cr);
     cairo_surface_destroy(surface);
+
+    printf("Wygenerowano raport PDF. \n");
+
+    return 0;
 }
-/*
-void zrob_wykres(const Statystyki* dane, const char* plik_wyjsciowy) {
-    int szer = 600;
-    int wys = 400;
 
-    cairo_surface_t* kartka = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, szer, wys);
-    cairo_t* cr = cairo_create(kartka);
 
-    // biale tlo
-    cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
-    cairo_paint(cr);
-
-    // tytul wykresu
-    cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_set_font_size(cr, 20);
-    cairo_move_to(cr, 40, 45);
-    cairo_show_text(cr, "Rozklad protokolow (liczba pakietow)");
-
-    // dane do slupkow
-    int wartosci[3] = { dane->tcp, dane->udp, dane->inne };
-    const char* nazwy[3] = { "TCP", "UDP", "Inne" };
-
-    // szukamy najwiekszej wartosci, zeby dobrze przeskalowac wysokosc slupkow
-    int maks = 1;
-    for (int i = 0; i < 3; i++) {
-        if (wartosci[i] > maks) {
-            maks = wartosci[i];
-        }
-    }
-
-    // rysowanie 3 slupkow
-    int start_x = 90;
-    int dol_y = 330;
-    int maks_wysokosc = 230;
-    int szer_slupka = 90;
-    int odstep = 150;
-
-    cairo_set_font_size(cr, 14);
-    for (int i = 0; i < 3; i++) {
-        double wys_slupka = ((double)wartosci[i] / maks) * maks_wysokosc;
-        int x = start_x + i * odstep;
-        int y = dol_y - (int)wys_slupka;
-
-        // slupek (niebieski)
-        cairo_set_source_rgb(cr, 0.2, 0.5, 0.8);
-        cairo_rectangle(cr, x, y, szer_slupka, wys_slupka);
-        cairo_fill(cr);
-
-        // liczba nad slupkiem
-        char tekst[32];
-        sprintf(tekst, "%d", wartosci[i]);
-        cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
-        cairo_move_to(cr, x + 25, y - 10);
-        cairo_show_text(cr, tekst);
-
-        // podpis pod slupkiem
-        cairo_move_to(cr, x + 25, dol_y + 25);
-        cairo_show_text(cr, nazwy[i]);
-    }
-
-    cairo_surface_write_to_png(kartka, plik_wyjsciowy);
-    cairo_destroy(cr);
-    cairo_surface_destroy(kartka);
-}
-*/
-
-/*
-void zrob_pdf(const Statystyki* dane, const char* plik_wyjsciowy) {
-    // format A4 w punktach: 595 x 842
-    cairo_surface_t* kartka = cairo_pdf_surface_create(plik_wyjsciowy, 595, 842);
-    cairo_t* cr = cairo_create(kartka);
-
-    char linia[256];
-    int y = 60;
-
-    // naglowek
-    cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_set_font_size(cr, 20);
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, "Raport z analizy ruchu sieciowego");
-
-    // sekcja: informacje o pliku
-
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL,CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 12);
-    y += 40;
-    sprintf(linia,"Plik: %s", dane->nazwa_pliku);
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, linia);
-
-
-    y += 25;
-    sprintf(linia, "Typ lacza danych: %s",linktype_nazwa(dane->linktype));
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, linia);
-    
-    y += 25;
-    sprintf(linia, "Czas przechwytywania: %.2f s", dane->czas_trwania);
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, linia);
-
-    y += 40;
-    cairo_select_font_face(cr, "Sans",CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, "Podsumowanie ruchu");
-
-    cairo_select_font_face(cr,"Sans",CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    y += 25;
-    sprintf(linia, "Liczba pakietow: %lld", dane->wszystkie_pakiety);
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, linia);
-
-    y += 25;
-    sprintf(linia,  "Laczny transfer: %lld B", dane->wszystkie_bajty);
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, linia);
-
-
-    double tcp_proc = 0;
-    double udp_proc = 0;
-    double inne_proc = 0;
-
-    if (dane->wszystkie_pakiety > 0)
-    {
-        tcp_proc =
-            100.0 * dane->tcp_pakiety /
-            dane->wszystkie_pakiety;
-
-        udp_proc =
-            100.0 * dane->udp_pakiety /
-            dane->wszystkie_pakiety;
-
-        inne_proc =
-            100.0 * dane->inne_pakiety /
-            dane->wszystkie_pakiety;
-    }
-
-    y += 40;
-
-    cairo_select_font_face(
-        cr,
-        "Sans",
-        CAIRO_FONT_SLANT_NORMAL,
-        CAIRO_FONT_WEIGHT_BOLD);
-
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, "Statystyki protokolow");
-
-    y += 25;
-
-    sprintf(
-        linia,
-        "TCP: %lld pakietow, %lld B (%.1f%%)",
-        dane->tcp_pakiety,
-        dane->tcp_bajty,
-        tcp_proc);
-
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, linia);
-
-    y += 25;
-
-    sprintf(
-        linia,
-        "UDP: %lld pakietow, %lld B (%.1f%%)",
-        dane->udp_pakiety,
-        dane->udp_bajty,
-        udp_proc);
-
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, linia);
-
-    y += 25;
-
-    sprintf(
-        linia,
-        "Inne: %lld pakietow, %lld B (%.1f%%)",
-        dane->inne_pakiety,
-        dane->inne_bajty,
-        inne_proc);
-
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, linia);
-
-    y += 40;
-
-    cairo_select_font_face(
-        cr,
-        "Sans",
-        CAIRO_FONT_SLANT_NORMAL,
-        CAIRO_FONT_WEIGHT_BOLD);
-
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, "Flagi TCP");
-
-    cairo_select_font_face(
-        cr,
-        "Sans",
-        CAIRO_FONT_SLANT_NORMAL,
-        CAIRO_FONT_WEIGHT_NORMAL);
-
-    y += 25;
-
-    sprintf(linia, "SYN: %d", dane->syn);
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, linia);
-
-    y += 25;
-
-    sprintf(linia, "ACK: %d", dane->ack);
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, linia);
-
-    y += 25;
-
-    sprintf(linia, "FIN: %d", dane->fin);
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, linia);
-
-    y += 25;
-
-    sprintf(linia, "RST: %d", dane->rst);
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, linia);
-
-    y += 30;
-
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(
-        cr,
-        "SYN - rozpoczynanie nowych polaczen TCP.");
-
-    y += 20;
-
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(
-        cr,
-        "ACK - potwierdzenie odebrania danych.");
-
-    y += 20;
-
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(
-        cr,
-        "FIN - poprawne zakonczenie polaczenia.");
-
-    y += 20;
-
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(
-        cr,
-        "RST - natychmiastowe zerwanie polaczenia.");
-
-
-
-    y += 40;
-
-    cairo_select_font_face(
-        cr,
-        "Sans",
-        CAIRO_FONT_SLANT_NORMAL,
-        CAIRO_FONT_WEIGHT_BOLD);
-
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, "Charakterystyka komunikacji");
-
-    cairo_select_font_face(
-        cr,
-        "Sans",
-        CAIRO_FONT_SLANT_NORMAL,
-        CAIRO_FONT_WEIGHT_NORMAL);
-
-    y += 25;
-
-    if (tcp_proc > udp_proc)
-    {
-        cairo_move_to(cr, 50, y);
-        cairo_show_text(
-            cairo_show_text(
-                cr,
-                "Dominujacym protokolem byl TCP.");
-    }
-
-    else
-    {
-        cairo_move_to(cr, 50, y);
-        cairo_show_text(
-            cr,
-            "Dominujacym protokolem byl UDP."); 
-    }
-
-    double przepustowosc = 0;
-
-    if (dane->czas_trwania > 0)
-    {
-        przepustowosc =
-            (dane->wszystkie_bajty * 8.0)
-            / dane->czas_trwania;
-    }
-    y += 25;
-
-    if (przepustowosc >= 1000000.0)
-    {
-        sprintf(
-            linia,
-            "Srednia przepustowosc: %.2f Mbps",
-            przepustowosc / 1000000.0);
-    }
-    else if (przepustowosc >= 1000.0)
-    {
-        sprintf(
-            linia,
-            "Srednia przepustowosc: %.2f Kbps",
-            przepustowosc / 1000.0);
-    }
-    else
-    {
-        sprintf(
-            linia,
-            "Srednia przepustowosc: %.2f bps",
-            przepustowosc);
-    }
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, linia);
-
-    y += 40;
-
-    cairo_select_font_face(
-        cr,
-        "Sans",
-        CAIRO_FONT_SLANT_NORMAL,
-        CAIRO_FONT_WEIGHT_BOLD);
-
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, "Najaktywniejsze porty");
-
-    cairo_select_font_face(
-        cr,
-        "Sans",
-        CAIRO_FONT_SLANT_NORMAL,
-        CAIRO_FONT_WEIGHT_NORMAL);
-
-    int porty_kopia[65536];
-
-    for (int i = 0; i < 65536; i++)
-    {
-        porty_kopia[i] = dane->porty[i];
-    }
-
-    for (int i = 0; i < 10; i++)
-    {
-        int max_port = -1;
-        int max_wartosc = -1;
-
-        for (int port = 0; port < 65536; port++)
-        {
-            if (porty_kopia[port] > max_wartosc)
-            {
-                max_wartosc = porty_kopia[port];
-                max_port = port;
-            }
-        }
-
-        if (max_wartosc <= 0)
-        {
-            break;
-        }
-
-        y += 25;
-
-        sprintf(
-            linia,
-            "Port %d - %d pakietow",
-            max_port,
-            max_wartosc);
-
-        cairo_move_to(cr, 50, y);
-        cairo_show_text(cr, linia);
-
-        porty_kopia[max_port] = -1;
-    }
-
-    y += 40;
-
-    cairo_select_font_face(
-        cr,
-        "Sans",
-        CAIRO_FONT_SLANT_NORMAL,
-        CAIRO_FONT_WEIGHT_BOLD);
-
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(
-        cr,
-        "Najaktywniejsze pary IP");
-
-    cairo_select_font_face(
-        cr,
-        "Sans",
-        CAIRO_FONT_SLANT_NORMAL,
-        CAIRO_FONT_WEIGHT_NORMAL);
-
-    for (int i = 0; i < dane->liczba_par_ip; i++)
-    {
-        y += 25;
-
-        sprintf(
-            linia,
-            "%d -> %d (%d pakietow)",
-            dane->pary_ip[i].src_ip,
-            dane->pary_ip[i].dst_ip,
-            dane->pary_ip[i].pakiety);
-
-        cairo_move_to(cr, 50, y);
-        cairo_show_text(cr, linia);
-    }
-
-
-    y += 40;
-
-    cairo_select_font_face(
-        cr,
-        "Sans",
-        CAIRO_FONT_SLANT_NORMAL,
-        CAIRO_FONT_WEIGHT_BOLD);
-
-    cairo_move_to(cr, 50, y);
-    cairo_show_text(cr, "Wykryte anomalie");
-
-    cairo_select_font_face(
-        cr,
-        "Sans",
-        CAIRO_FONT_SLANT_NORMAL,
-        CAIRO_FONT_WEIGHT_NORMAL);
-
-    for (int i = 0; i < dane->ile_alertow; i++)
-    {
-        y += 25;
-
-        sprintf(
-            linia,
-            "- %s",
-            dane->alerty[i]);
-
-        cairo_move_to(cr, 50, y);
-        cairo_show_text(cr, linia);
-    }
-    cairo_show_page(cr);
-    cairo_destroy(cr);
-    cairo_surface_destroy(kartka);
-
-
-}
-*/

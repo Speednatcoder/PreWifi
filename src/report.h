@@ -3,6 +3,6 @@
 
 #include "types.h"
 
-void zrob_pdf(const Statystyki* dane, const char* plik_wyjsciowy);
+int zrob_pdf(const Statystyki* dane, const char* plik_wyjsciowy);
 
 #endif

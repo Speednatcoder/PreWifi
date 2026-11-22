@@ -25,7 +25,10 @@ int main(int argc, char* argv[])
         printf("Blad generowania wykresow\n");
         return 1;
     }
-    zrob_pdf(&dane, "raport.pdf");
+    if (zrob_pdf(&dane, "raport.pdf") != 0) {
+        printf("Blad generowania raportu\n");
+        return 1;
+    }
 
 
     return 0;
